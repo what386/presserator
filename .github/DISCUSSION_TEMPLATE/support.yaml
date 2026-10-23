@@ -1,0 +1,9 @@
+title: Support / Help
+labels: [support, question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: What do you need help with?
+    validations:
+      required: true
