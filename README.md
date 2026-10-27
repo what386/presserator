@@ -1,13 +1,13 @@
 # presserator
 
-ESP32 status LED blinky application written in C++ with ESP-IDF. The LED turns
-on and off every half second.
+An ESP32-S3 USB keyboard bridge. A Linux host utility sends typed ASCII text to
+the ESP32 over Bluetooth LE, and the ESP32 presents it to the target computer
+as a USB HID keyboard. The status LED continues to blink every half second.
 
 ## Development
 
-Install ESP-IDF at `/opt/esp-idf` and install its toolchain. Install
-[direnv](https://direnv.net/), enter the project directory, and approve the
-environment once:
+Install ESP-IDF at `/opt/esp-idf`
+Install [direnv](https://direnv.net/)
 
 ```sh
 direnv allow
@@ -17,10 +17,43 @@ just flash
 just monitor
 ```
 
-The `.envrc` loads the ESP-IDF tools and sets `IDF_PATH`. If ESP-IDF is installed
-elsewhere, update `IDF_PATH` in `.envrc` before running `direnv allow` again.
-The chip target defaults to `esp32`. To use another ESP-IDF target, set
-`IDF_TARGET` in `.envrc` (for example, `esp32s3`), run `direnv allow`, then run
-`just target` before building. The status LED defaults to GPIO 2; change
-`BLINKY_STATUS_LED_GPIO` in `main/main.cpp` for boards that use another pin.
-For an active-low LED, set `BLINKY_STATUS_LED_ACTIVE_LEVEL` to `0`.
+## Host text sender
+
+Build the Linux host utility with:
+
+```sh
+just host
+```
+
+To build and run it in one step, pipe text into `just run`:
+
+```sh
+printf 'Hello, world!\n' | just run
+```
+
+It reads ASCII text from standard input, discovers and pairs with the Presserator
+over Bluetooth LE, then writes binary key-state protocol packets to its GATT
+service. Each character becomes a HID key press followed by a release. For
+example:
+
+```sh
+printf 'Hello, world!\n' | build/host/presserator-host
+```
+
+An optional Bluetooth address selects a particular device when more than one is
+advertising:
+
+```sh
+printf 'Hello\n' | build/host/presserator-host AA:BB:CC:DD:EE:FF
+```
+
+The same address can be passed through the recipe:
+
+```sh
+printf 'Hello\n' | just run AA:BB:CC:DD:EE:FF
+```
+
+The wire packet is 13 bytes: `PR`, version, 16-bit sequence number, modifier
+byte, six HID key usages, and CRC-8. The text mapper uses a US keyboard layout;
+non-ASCII input is rejected. The Linux host target requires BlueZ and the GLib
+GIO development package.
