@@ -1,0 +1,49 @@
+#include "receiver.h"
+
+#include "keyboard.h"
+#include "protocol.h"
+
+namespace presserator::client {
+namespace {
+
+bool g_have_sequence = false;
+uint16_t g_last_sequence = 0;
+
+} // namespace
+
+esp_err_t protocol_receive(const uint8_t* packet, size_t size) {
+    protocol::Frame frame{};
+    if (!protocol::decode(packet, size, &frame)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (g_have_sequence) {
+        const uint16_t advance = static_cast<uint16_t>(frame.sequence - g_last_sequence);
+        if (advance == 0 || advance >= 0x8000) {
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    KeyboardInputReport report{};
+    report.modifiers = frame.state.modifiers;
+    for (size_t i = 0; i < 6; ++i) {
+        report.keys[i] = frame.state.keys[i];
+    }
+
+    const esp_err_t err = keyboard_set_report(report);
+    if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+        // Preserve the newest desired state even while USB is temporarily
+        // unmounted; the next valid snapshot will resynchronize the host.
+        g_last_sequence = frame.sequence;
+        g_have_sequence = true;
+    }
+    return err;
+}
+
+void protocol_reset() {
+    g_have_sequence = false;
+    g_last_sequence = 0;
+    (void)keyboard_release_all();
+}
+
+} // namespace presserator::client
