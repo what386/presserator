@@ -4,6 +4,13 @@ default:
 build:
     idf.py build
 
+host:
+    cmake -S src/host -B build/host
+    cmake --build build/host
+
+run *args: host
+    build/host/presserator-host {{args}}
+
 target:
     idf.py set-target "$IDF_TARGET"
 
