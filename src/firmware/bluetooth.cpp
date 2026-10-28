@@ -68,7 +68,8 @@ const ble_gatt_chr_def kGattCharacteristics[] = {
         .access_cb = key_state_access,
         .arg = nullptr,
         .descriptors = nullptr,
-        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC,
+        .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP |
+                 BLE_GATT_CHR_F_WRITE_ENC,
         .min_key_size = 0,
         .val_handle = &g_characteristicHandle,
         .cpfd = nullptr,

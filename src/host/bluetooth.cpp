@@ -385,7 +385,7 @@ bool BleTransport::send(const protocol::Packet& packet) {
 
     GVariantBuilder options;
     g_variant_builder_init(&options, G_VARIANT_TYPE("a{sv}"));
-    g_variant_builder_add(&options, "{sv}", "type", g_variant_new_string("request"));
+    g_variant_builder_add(&options, "{sv}", "type", g_variant_new_string("command"));
     GVariant* value = g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, packet.data(),
                                                 packet.size(), sizeof(uint8_t));
     GVariant* parameters = g_variant_new("(@ay@a{sv})", value,

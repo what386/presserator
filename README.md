@@ -31,7 +31,15 @@ Run it interactively to send each typed key immediately:
 just run
 ```
 
-Press Ctrl-D to quit. To send text from a pipe or file instead:
+Press Ctrl-Shift-V to send the host clipboard through the terminal, or
+Ctrl-Shift-C to quit. On WezTerm, Ctrl-Shift-C needs the Presserator-specific
+key binding described below. To send the clipboard once and exit:
+
+```sh
+just run --clipboard
+```
+
+To send text from a pipe or file instead:
 
 ```sh
 printf 'Hello, world!\n' | just run
@@ -57,6 +65,26 @@ The same address can be passed through the recipe:
 
 ```sh
 printf 'Hello\n' | just run AA:BB:CC:DD:EE:FF
+```
+
+Use `just run --clipboard AA:BB:CC:DD:EE:FF` to send the clipboard to a
+specific device. Clipboard mode uses `wl-paste` on Wayland or `xclip` on X11.
+
+WezTerm normally reserves Ctrl-Shift-C for Copy. Add this binding to its
+`config.keys` table to make it quit Presserator while keeping Copy elsewhere:
+
+```lua
+{
+  key = "c",
+  mods = "CTRL|SHIFT",
+  action = wezterm.action_callback(function(window, pane)
+    if pane:get_user_vars().presserator == "1" then
+      window:perform_action(wezterm.action.SendString("\x1c"), pane)
+    else
+      window:perform_action(wezterm.action.CopyTo("Clipboard"), pane)
+    end
+  end),
+},
 ```
 
 The wire packet is 13 bytes: `PR`, version, 16-bit sequence number, modifier
