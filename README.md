@@ -25,16 +25,22 @@ Build the Linux host utility with:
 just host
 ```
 
-To build and run it in one step, pipe text into `just run`:
+Run it interactively to send each typed key immediately:
+
+```sh
+just run
+```
+
+Press Ctrl-D to quit. To send text from a pipe or file instead:
 
 ```sh
 printf 'Hello, world!\n' | just run
 ```
 
-It reads ASCII text from standard input, discovers and pairs with the Presserator
-over Bluetooth LE, then writes binary key-state protocol packets to its GATT
-service. Each character becomes a HID key press followed by a release. For
-example:
+It reads ASCII text from the terminal or standard input, discovers and pairs
+with the Presserator over Bluetooth LE, then writes binary key-state protocol
+packets to its GATT service. Each character becomes a HID key press followed by
+a release. For example:
 
 ```sh
 printf 'Hello, world!\n' | build/host/presserator-host

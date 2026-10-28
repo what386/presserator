@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <termios.h>
 #include <unistd.h>
 
 namespace {
@@ -14,6 +15,43 @@ struct KeyStroke {
 };
 
 constexpr uint8_t kLeftShift = 1u << 1;
+
+class TerminalInputMode {
+public:
+    bool enable() {
+        if (!::isatty(STDIN_FILENO)) {
+            return true;
+        }
+        if (::tcgetattr(STDIN_FILENO, &original_) < 0) {
+            std::fprintf(stderr, "read terminal settings: %s\n", std::strerror(errno));
+            return false;
+        }
+
+        termios interactive = original_;
+        interactive.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO | ISIG | IEXTEN));
+        interactive.c_iflag &= static_cast<tcflag_t>(~IXON);
+        interactive.c_cc[VMIN] = 1;
+        interactive.c_cc[VTIME] = 0;
+        if (::tcsetattr(STDIN_FILENO, TCSANOW, &interactive) < 0) {
+            std::fprintf(stderr, "set terminal input mode: %s\n", std::strerror(errno));
+            return false;
+        }
+        interactive_ = true;
+        return true;
+    }
+
+    ~TerminalInputMode() {
+        if (interactive_) {
+            (void)::tcsetattr(STDIN_FILENO, TCSANOW, &original_);
+        }
+    }
+
+    bool interactive() const { return interactive_; }
+
+private:
+    termios original_{};
+    bool interactive_ = false;
+};
 
 bool map_ascii(uint8_t character, KeyStroke* key) {
     if (character >= 'a' && character <= 'z') {
@@ -42,7 +80,8 @@ bool map_ascii(uint8_t character, KeyStroke* key) {
     case '\n':
     case '\r': key->usage = 0x28; key->modifiers = 0; return true;
     case '\t': key->usage = 0x2B; key->modifiers = 0; return true;
-    case '\b': key->usage = 0x2A; key->modifiers = 0; return true;
+    case '\b':
+    case 0x7F: key->usage = 0x2A; key->modifiers = 0; return true;
     case '-': key->usage = 0x2D; key->modifiers = 0; return true;
     case '_': key->usage = 0x2D; key->modifiers = kLeftShift; return true;
     case '=': key->usage = 0x2E; key->modifiers = 0; return true;
@@ -83,7 +122,7 @@ bool map_ascii(uint8_t character, KeyStroke* key) {
 
 int main(int argc, char** argv) {
     if (argc > 2) {
-        std::fprintf(stderr, "Usage: %s [BLE-device-address] < text.txt\n", argv[0]);
+        std::fprintf(stderr, "Usage: %s [BLE-device-address] [< text.txt]\n", argv[0]);
         return 2;
     }
 
@@ -92,6 +131,14 @@ int main(int argc, char** argv) {
         return 1;
     }
     presserator::host::Sender sender(transport);
+
+    TerminalInputMode input_mode;
+    if (!input_mode.enable()) {
+        return 1;
+    }
+    if (input_mode.interactive()) {
+        std::fprintf(stderr, "Interactive mode: type to send; Ctrl-D to quit.\n");
+    }
 
     bool previous_was_cr = false;
     uint8_t buffer[256];
@@ -110,6 +157,12 @@ int main(int argc, char** argv) {
 
         for (ssize_t i = 0; i < count; ++i) {
             const uint8_t character = buffer[i];
+            if (input_mode.interactive() && character == 0x04) {
+                return 0;
+            }
+            if (input_mode.interactive() && character == 0x03) {
+                return 130;
+            }
             if (character == '\n' && previous_was_cr) {
                 previous_was_cr = false;
                 continue;
