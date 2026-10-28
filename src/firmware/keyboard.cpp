@@ -3,6 +3,7 @@
 #include "class/hid/hid_device.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "tusb.h"
 
 namespace {
@@ -50,6 +51,8 @@ static_assert(sizeof(kKeyboardReportDescriptor) == presserator::kKeyboardReportD
 portMUX_TYPE g_reportMux = portMUX_INITIALIZER_UNLOCKED;
 presserator::KeyboardInputReport g_currentReport{};
 presserator::KeyboardLedReport g_ledReport = 0;
+StaticSemaphore_t g_reportCompleteStorage;
+SemaphoreHandle_t g_reportComplete = nullptr;
 
 presserator::KeyboardInputReport current_report() {
     portENTER_CRITICAL(&g_reportMux);
@@ -63,14 +66,16 @@ esp_err_t send_current_report() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    // BLE writes can arrive before the previous USB interrupt transfer finishes.
-    // Wait for the endpoint so a key release cannot replace an unsent key press.
+    // Wake on USB completion instead of sleeping for a whole scheduler tick.
+    // Keep each press/release in order while the previous transfer is in flight.
     const TickType_t started = xTaskGetTickCount();
     while (!tud_hid_ready()) {
-        if (!tud_mounted() || xTaskGetTickCount() - started >= pdMS_TO_TICKS(100)) {
+        const TickType_t elapsed = xTaskGetTickCount() - started;
+        if (!tud_mounted() || elapsed >= pdMS_TO_TICKS(100) ||
+            g_reportComplete == nullptr) {
             return ESP_ERR_INVALID_STATE;
         }
-        vTaskDelay(1);
+        (void)xSemaphoreTake(g_reportComplete, pdMS_TO_TICKS(100) - elapsed);
     }
 
     const auto report = current_report();
@@ -85,9 +90,25 @@ extern "C" const uint8_t* tud_hid_descriptor_report_cb(uint8_t instance) {
     return instance == 0 ? kKeyboardReportDescriptor : nullptr;
 }
 
+extern "C" void tud_hid_report_complete_cb(uint8_t instance, const uint8_t*, uint16_t) {
+    if (instance == 0 && g_reportComplete != nullptr) {
+        (void)xSemaphoreGive(g_reportComplete);
+    }
+}
+
+extern "C" void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t,
+                                         const uint8_t*, uint16_t) {
+    if (instance == 0 && g_reportComplete != nullptr) {
+        (void)xSemaphoreGive(g_reportComplete);
+    }
+}
+
 namespace presserator {
 
 void keyboard_init() {
+    if (g_reportComplete == nullptr) {
+        g_reportComplete = xSemaphoreCreateBinaryStatic(&g_reportCompleteStorage);
+    }
     portENTER_CRITICAL(&g_reportMux);
     g_currentReport = {};
     g_ledReport = 0;

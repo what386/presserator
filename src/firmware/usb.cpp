@@ -40,7 +40,7 @@ constexpr uint8_t kConfigurationDescriptor[] = {
     TUD_CONFIG_DESCRIPTOR(1, 1, 0, TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN,
                           0, 100), // Bus-powered, 100 mA.
     TUD_HID_DESCRIPTOR(0, 0, true, presserator::kKeyboardReportDescriptorLength,
-                       0x81, 8, 10),
+                       0x81, 8, 1), // Poll every millisecond for responsive typing.
 };
 
 static_assert(sizeof(kConfigurationDescriptor) == TUD_CONFIG_DESC_LEN + TUD_HID_DESC_LEN,

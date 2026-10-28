@@ -54,10 +54,14 @@ a release. For example:
 printf 'Hello, world!\n' | build/host/presserator-host
 ```
 
-Pair the device through your Bluetooth settings when needed. The utility reuses
+The utility pairs the device only when it is unpaired, then reuses
 an existing connection and leaves it connected on exit; disconnect it through
 your Bluetooth settings whenever you choose. Ctrl-Shift-C quits immediately,
 including during connection setup or a paste.
+
+Firmware stores Bluetooth bonding keys in NVS so pairing survives restarts.
+When upgrading from firmware that did not preserve keys, flash the update,
+then forget and pair Presserator once through your Bluetooth settings.
 
 An optional Bluetooth address selects a particular device when more than one is
 advertising:

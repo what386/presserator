@@ -114,6 +114,7 @@ std::string find_device(GVariant* objects, const char* requested_address) {
 }
 
 struct DeviceState {
+    bool paired = false;
     bool connected = false;
     bool services_resolved = false;
 };
@@ -132,11 +133,13 @@ DeviceState device_state(GVariant* objects, const std::string& device_path) {
         g_variant_unref(interfaces);
         DeviceState state;
         if (properties != nullptr) {
+            gboolean paired = false;
             gboolean connected = false;
             gboolean services_resolved = false;
+            g_variant_lookup(properties, "Paired", "b", &paired);
             g_variant_lookup(properties, "Connected", "b", &connected);
             g_variant_lookup(properties, "ServicesResolved", "b", &services_resolved);
-            state = {connected != 0, services_resolved != 0};
+            state = {paired != 0, connected != 0, services_resolved != 0};
             g_variant_unref(properties);
         }
         return state;
@@ -283,38 +286,42 @@ bool BleTransport::connect(const char* optional_address) {
         g_clear_error(&error);
         return false;
     }
+    const DeviceState initial_state = device_state(objects, impl_->device_path);
+    g_variant_unref(objects);
+    if (!initial_state.paired) {
+        std::fprintf(stderr, "Pairing with Presserator...\n");
+        if (!call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
+                         "Pair", nullptr, &error, 60000)) {
+            print_error("pair with Presserator", error);
+            g_clear_error(&error);
+            return false;
+        }
+    }
+
+    // Pair can establish the connection itself; read the current state afterward.
+    objects = get_objects(impl_->bus, &error);
+    if (objects == nullptr) {
+        print_error("query BlueZ connection state", error);
+        g_clear_error(&error);
+        return false;
+    }
     const bool already_connected = device_state(objects, impl_->device_path).connected;
     g_variant_unref(objects);
 
-    // Reuse an existing link; only establish one when disconnected.
-    bool connected = already_connected;
-    for (int attempt = 0; !connected && attempt < 3; ++attempt) {
-        if (call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
-                        "Connect", nullptr, &error, 30000)) {
-            connected = true;
-            break;
-        }
+    // Make one connection request only and leave existing connections intact.
+    if (!already_connected &&
+        !call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
+                     "Connect", nullptr, &error, 30000)) {
         gchar* remote_error = g_dbus_error_get_remote_error(error);
-        const bool already_connected = remote_error != nullptr &&
-                                       std::strcmp(remote_error, "org.bluez.Error.AlreadyConnected") == 0;
-        const bool aborted = error != nullptr &&
-                             std::strstr(error->message, "le-connection-abort-by-local") != nullptr;
+        const bool connected = remote_error != nullptr &&
+                               std::strcmp(remote_error, "org.bluez.Error.AlreadyConnected") == 0;
         g_free(remote_error);
-        if (already_connected) {
-            g_clear_error(&error);
-            connected = true;
-            break;
-        }
-        if (!aborted || attempt == 2) {
+        if (!connected) {
             print_error("connect to Presserator", error);
             g_clear_error(&error);
             return false;
         }
         g_clear_error(&error);
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    if (!connected) {
-        return false;
     }
 
     const auto services_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -326,7 +333,14 @@ bool BleTransport::connect(const char* optional_address) {
             return false;
         }
         const DeviceState state = device_state(objects, impl_->device_path);
-        if (state.connected && state.services_resolved) {
+        if (!state.connected) {
+            g_variant_unref(objects);
+            std::fprintf(stderr,
+                         "Presserator disconnected before GATT was ready. Check the device's "
+                         "Bluetooth pairing in your system settings.\n");
+            return false;
+        }
+        if (state.services_resolved) {
             impl_->characteristic_path = find_characteristic(objects, impl_->device_path);
         }
         g_variant_unref(objects);
