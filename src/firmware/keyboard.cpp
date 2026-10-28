@@ -2,6 +2,8 @@
 
 #include "class/hid/hid_device.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "tusb.h"
 
 namespace {
 
@@ -57,8 +59,18 @@ presserator::KeyboardInputReport current_report() {
 }
 
 esp_err_t send_current_report() {
-    if (!tud_hid_ready()) {
+    if (!tud_mounted()) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    // BLE writes can arrive before the previous USB interrupt transfer finishes.
+    // Wait for the endpoint so a key release cannot replace an unsent key press.
+    const TickType_t started = xTaskGetTickCount();
+    while (!tud_hid_ready()) {
+        if (!tud_mounted() || xTaskGetTickCount() - started >= pdMS_TO_TICKS(100)) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        vTaskDelay(1);
     }
 
     const auto report = current_report();

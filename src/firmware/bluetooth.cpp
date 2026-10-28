@@ -55,7 +55,8 @@ int key_state_access(uint16_t, uint16_t, ble_gatt_access_ctxt* context, void*) {
     }
 
     const esp_err_t err = presserator::client::protocol_receive(packet, length);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Key report was not sent to USB: %s", esp_err_to_name(err));
         return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
     }
     return 0;

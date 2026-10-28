@@ -59,6 +59,12 @@ bool has_uuid(GVariant* properties, const char* property_name, const char* wante
     return found;
 }
 
+bool uuid_equals(GVariant* properties, const char* wanted) {
+    const gchar* uuid = nullptr;
+    return g_variant_lookup(properties, "UUID", "&s", &uuid) &&
+           g_ascii_strcasecmp(uuid, wanted) == 0;
+}
+
 std::string find_adapter(GVariant* objects) {
     GVariantIter iter;
     g_variant_iter_init(&iter, objects);
@@ -107,7 +113,13 @@ std::string find_device(GVariant* objects, const char* requested_address) {
     return {};
 }
 
-bool is_connected(GVariant* objects, const std::string& device_path) {
+struct DeviceState {
+    bool paired = false;
+    bool connected = false;
+    bool services_resolved = false;
+};
+
+DeviceState device_state(GVariant* objects, const std::string& device_path) {
     GVariantIter iter;
     g_variant_iter_init(&iter, objects);
     const char* path = nullptr;
@@ -119,14 +131,20 @@ bool is_connected(GVariant* objects, const std::string& device_path) {
         }
         GVariant* properties = get_properties(interfaces, "org.bluez.Device1");
         g_variant_unref(interfaces);
-        gboolean connected = false;
+        DeviceState state;
         if (properties != nullptr) {
+            gboolean paired = false;
+            gboolean connected = false;
+            gboolean services_resolved = false;
+            g_variant_lookup(properties, "Paired", "b", &paired);
             g_variant_lookup(properties, "Connected", "b", &connected);
+            g_variant_lookup(properties, "ServicesResolved", "b", &services_resolved);
+            state = {paired != 0, connected != 0, services_resolved != 0};
             g_variant_unref(properties);
         }
-        return connected;
+        return state;
     }
-    return false;
+    return {};
 }
 
 std::string find_characteristic(GVariant* objects, const std::string& device_path) {
@@ -140,7 +158,7 @@ std::string find_characteristic(GVariant* objects, const std::string& device_pat
         g_variant_unref(interfaces);
         if (properties != nullptr) {
             const gchar* device = nullptr;
-            const bool match = has_uuid(properties, "UUID", kServiceUuid) &&
+            const bool match = uuid_equals(properties, kServiceUuid) &&
                                g_variant_lookup(properties, "Device", "&o", &device) &&
                                device_path == device;
             if (match) {
@@ -161,7 +179,7 @@ std::string find_characteristic(GVariant* objects, const std::string& device_pat
         g_variant_unref(interfaces);
         if (properties != nullptr) {
             const gchar* service = nullptr;
-            const bool match = has_uuid(properties, "UUID", kCharacteristicUuid) &&
+            const bool match = uuid_equals(properties, kCharacteristicUuid) &&
                                g_variant_lookup(properties, "Service", "&o", &service) &&
                                service_path == service;
             g_variant_unref(properties);
@@ -275,42 +293,54 @@ bool BleTransport::connect(const char* optional_address) {
     }
     std::fprintf(stderr, "Found Presserator at %s\n", impl_->device_path.c_str());
 
-    if (!call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
-                     "Pair", nullptr, &error, 60000)) {
-        gchar* remote_error = g_dbus_error_get_remote_error(error);
-        const bool already_paired = remote_error != nullptr &&
-                                    std::strcmp(remote_error, "org.bluez.Error.AlreadyExists") == 0;
-        g_free(remote_error);
-        if (!already_paired) {
+    objects = get_objects(impl_->bus, &error);
+    if (objects == nullptr) {
+        print_error("query BlueZ pairing state", error);
+        g_clear_error(&error);
+        return false;
+    }
+    const bool paired = device_state(objects, impl_->device_path).paired;
+    g_variant_unref(objects);
+
+    if (!paired) {
+        if (!call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
+                         "Pair", nullptr, &error, 60000)) {
             print_error("pair with Presserator", error);
             g_clear_error(&error);
             return false;
         }
-        g_clear_error(&error);
     }
 
-    objects = get_objects(impl_->bus, &error);
-    if (objects == nullptr) {
-        print_error("query BlueZ connection state", error);
-        g_clear_error(&error);
-        return false;
-    }
-    const bool already_connected = is_connected(objects, impl_->device_path);
-    g_variant_unref(objects);
-
-    if (!already_connected &&
-        !call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
-                     "Connect", nullptr, &error, 30000)) {
+    // Pairing can briefly connect and then disconnect. BlueZ may also abort the
+    // first LE connection while that link is being torn down.
+    bool connected = false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
+                        "Connect", nullptr, &error, 30000)) {
+            connected = true;
+            break;
+        }
         gchar* remote_error = g_dbus_error_get_remote_error(error);
-        const bool connected_error = remote_error != nullptr &&
-                                     std::strcmp(remote_error, "org.bluez.Error.AlreadyConnected") == 0;
+        const bool already_connected = remote_error != nullptr &&
+                                       std::strcmp(remote_error, "org.bluez.Error.AlreadyConnected") == 0;
+        const bool aborted = error != nullptr &&
+                             std::strstr(error->message, "le-connection-abort-by-local") != nullptr;
         g_free(remote_error);
-        if (!connected_error) {
+        if (already_connected) {
+            g_clear_error(&error);
+            connected = true;
+            break;
+        }
+        if (!aborted || attempt == 2) {
             print_error("connect to Presserator", error);
             g_clear_error(&error);
             return false;
         }
         g_clear_error(&error);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    if (!connected) {
+        return false;
     }
 
     const auto services_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -321,7 +351,10 @@ bool BleTransport::connect(const char* optional_address) {
             g_clear_error(&error);
             return false;
         }
-        impl_->characteristic_path = find_characteristic(objects, impl_->device_path);
+        const DeviceState state = device_state(objects, impl_->device_path);
+        if (state.connected && state.services_resolved) {
+            impl_->characteristic_path = find_characteristic(objects, impl_->device_path);
+        }
         g_variant_unref(objects);
         if (!impl_->characteristic_path.empty()) {
             break;
@@ -330,7 +363,7 @@ bool BleTransport::connect(const char* optional_address) {
     }
 
     if (impl_->characteristic_path.empty()) {
-        std::fprintf(stderr, "Presserator key input GATT characteristic was not found.\n");
+        std::fprintf(stderr, "Presserator did not establish a ready GATT connection.\n");
         return false;
     }
 

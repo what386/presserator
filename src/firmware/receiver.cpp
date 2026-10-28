@@ -31,9 +31,7 @@ esp_err_t protocol_receive(const uint8_t* packet, size_t size) {
     }
 
     const esp_err_t err = keyboard_set_report(report);
-    if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
-        // Preserve the newest desired state even while USB is temporarily
-        // unmounted; the next valid snapshot will resynchronize the host.
+    if (err == ESP_OK) {
         g_last_sequence = frame.sequence;
         g_have_sequence = true;
     }
