@@ -10,7 +10,7 @@ jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check formatting
         run: |
           find main -name '*.cpp' -print0 | xargs -0 clang-format --dry-run --Werror
