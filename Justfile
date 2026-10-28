@@ -9,6 +9,7 @@ host:
     cmake --build build/host
 
 run *args: host
+    just host
     build/host/presserator-host {{args}}
 
 target:

@@ -39,6 +39,11 @@ key binding described below. To send the clipboard once and exit:
 just run --clipboard
 ```
 
+Interactive mode forwards Ctrl-letter combinations (including Ctrl-C and Ctrl-Z),
+Alt combinations, arrows, Home/End, Insert/Delete, Page Up/Down, Tab/Shift-Tab,
+Escape, and F1–F12. Modified navigation and function keys retain their modifiers.
+Unknown terminal key sequences are ignored without ending the session.
+
 To send text from a pipe or file instead:
 
 ```sh
@@ -53,50 +58,3 @@ a release. For example:
 ```sh
 printf 'Hello, world!\n' | build/host/presserator-host
 ```
-
-The utility pairs the device only when it is unpaired, then reuses
-an existing connection and leaves it connected on exit; disconnect it through
-your Bluetooth settings whenever you choose. Ctrl-Shift-C quits immediately,
-including during connection setup or a paste.
-
-Firmware stores Bluetooth bonding keys in NVS so pairing survives restarts.
-When upgrading from firmware that did not preserve keys, flash the update,
-then forget and pair Presserator once through your Bluetooth settings.
-
-An optional Bluetooth address selects a particular device when more than one is
-advertising:
-
-```sh
-printf 'Hello\n' | build/host/presserator-host AA:BB:CC:DD:EE:FF
-```
-
-The same address can be passed through the recipe:
-
-```sh
-printf 'Hello\n' | just run AA:BB:CC:DD:EE:FF
-```
-
-Use `just run --clipboard AA:BB:CC:DD:EE:FF` to send the clipboard to a
-specific device. Clipboard mode uses `wl-paste` on Wayland or `xclip` on X11.
-
-WezTerm normally reserves Ctrl-Shift-C for Copy. Add this binding to its
-`config.keys` table to make it quit Presserator while keeping Copy elsewhere:
-
-```lua
-{
-  key = "c",
-  mods = "CTRL|SHIFT",
-  action = wezterm.action_callback(function(window, pane)
-    if pane:get_user_vars().presserator == "1" then
-      window:perform_action(wezterm.action.SendString("\x1c"), pane)
-    else
-      window:perform_action(wezterm.action.CopyTo("Clipboard"), pane)
-    end
-  end),
-},
-```
-
-The wire packet is 13 bytes: `PR`, version, 16-bit sequence number, modifier
-byte, six HID key usages, and CRC-8. The text mapper uses a US keyboard layout;
-non-ASCII input is rejected. The Linux host target requires BlueZ and the GLib
-GIO development package.

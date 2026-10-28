@@ -1,3 +1,4 @@
+#include "cli.h"
 #include "clipboard.h"
 
 #include <gio/gio.h>
@@ -14,7 +15,7 @@ bool read_with(const char* const* command, std::string* text) {
                                                G_SUBPROCESS_FLAGS_STDERR_PIPE),
         &error);
     if (process == nullptr) {
-        std::fprintf(stderr, "start clipboard reader %s: %s\n", command[0], error->message);
+        cli::error("start clipboard reader %s: %s", command[0], error->message);
         g_clear_error(&error);
         return false;
     }
@@ -33,11 +34,11 @@ bool read_with(const char* const* command, std::string* text) {
             text->assign(bytes, length);
         }
     } else if (error != nullptr) {
-        std::fprintf(stderr, "read clipboard: %s\n", error->message);
+        cli::error("read clipboard: %s", error->message);
     } else {
         gsize length = 0;
         const auto* bytes = static_cast<const char*>(g_bytes_get_data(diagnostics, &length));
-        std::fprintf(stderr, "read clipboard with %s failed: %.*s\n", command[0],
+        cli::error("read clipboard with %s failed: %.*s", command[0],
                      static_cast<int>(length), length == 0 ? "" : bytes);
     }
     g_clear_error(&error);
@@ -54,6 +55,7 @@ bool read_with(const char* const* command, std::string* text) {
 } // namespace
 
 bool read_clipboard(std::string* text) {
+    cli::status("Reading clipboard");
     const char* wayland[] = {"wl-paste", "--no-newline", "--type", "text", nullptr};
     const char* x11[] = {"xclip", "-selection", "clipboard", "-out", nullptr};
     if (g_getenv("WAYLAND_DISPLAY") != nullptr) {
@@ -62,7 +64,7 @@ bool read_clipboard(std::string* text) {
     if (g_getenv("DISPLAY") != nullptr) {
         return read_with(x11, text);
     }
-    std::fprintf(stderr, "No Wayland or X11 clipboard is available.\n");
+    cli::error("No Wayland or X11 clipboard is available.");
     return false;
 }
 

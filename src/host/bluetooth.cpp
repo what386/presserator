@@ -1,3 +1,4 @@
+#include "cli.h"
 #include "bluetooth.h"
 
 #include <gio/gio.h>
@@ -18,7 +19,7 @@ constexpr char kObjectManagerPath[] = "/";
 constexpr char kObjectManagerInterface[] = "org.freedesktop.DBus.ObjectManager";
 
 void print_error(const char* action, GError* error) {
-    std::fprintf(stderr, "%s: %s\n", action,
+    cli::error("%s: %s", action,
                  error != nullptr ? error->message : "unknown D-Bus error");
 }
 
@@ -224,6 +225,7 @@ BleTransport::BleTransport() : impl_(new Impl) {}
 BleTransport::~BleTransport() { delete impl_; }
 
 bool BleTransport::connect(const char* optional_address) {
+    cli::status("Searching for Presserator");
     GError* error = nullptr;
     impl_->bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, nullptr, &error);
     if (impl_->bus == nullptr) {
@@ -242,7 +244,7 @@ bool BleTransport::connect(const char* optional_address) {
     impl_->device_path = find_device(objects, optional_address);
     g_variant_unref(objects);
     if (impl_->adapter_path.empty()) {
-        std::fprintf(stderr, "No BlueZ Bluetooth adapter was found.\n");
+        cli::error("No BlueZ Bluetooth adapter was found.");
         return false;
     }
 
@@ -256,7 +258,6 @@ bool BleTransport::connect(const char* optional_address) {
         }
     }
 
-    std::fprintf(stderr, "Searching for Presserator over Bluetooth LE...\n");
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (impl_->device_path.empty() && std::chrono::steady_clock::now() < deadline) {
         objects = get_objects(impl_->bus, &error);
@@ -275,10 +276,10 @@ bool BleTransport::connect(const char* optional_address) {
     }
 
     if (impl_->device_path.empty()) {
-        std::fprintf(stderr, "No Presserator BLE device found. Check that it is powered and advertising.\n");
+        cli::error("No Presserator BLE device found. Check that it is powered and advertising.");
         return false;
     }
-    std::fprintf(stderr, "Found Presserator at %s\n", impl_->device_path.c_str());
+    cli::status("Found Presserator");
 
     objects = get_objects(impl_->bus, &error);
     if (objects == nullptr) {
@@ -289,7 +290,7 @@ bool BleTransport::connect(const char* optional_address) {
     const DeviceState initial_state = device_state(objects, impl_->device_path);
     g_variant_unref(objects);
     if (!initial_state.paired) {
-        std::fprintf(stderr, "Pairing with Presserator...\n");
+        cli::status("Pairing");
         if (!call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
                          "Pair", nullptr, &error, 60000)) {
             print_error("pair with Presserator", error);
@@ -308,6 +309,7 @@ bool BleTransport::connect(const char* optional_address) {
     const bool already_connected = device_state(objects, impl_->device_path).connected;
     g_variant_unref(objects);
 
+    cli::status(already_connected ? "Using existing connection" : "Connecting");
     // Make one connection request only and leave existing connections intact.
     if (!already_connected &&
         !call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
@@ -324,6 +326,7 @@ bool BleTransport::connect(const char* optional_address) {
         g_clear_error(&error);
     }
 
+    cli::status("Preparing keyboard connection");
     const auto services_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     while (std::chrono::steady_clock::now() < services_deadline) {
         objects = get_objects(impl_->bus, &error);
@@ -335,9 +338,9 @@ bool BleTransport::connect(const char* optional_address) {
         const DeviceState state = device_state(objects, impl_->device_path);
         if (!state.connected) {
             g_variant_unref(objects);
-            std::fprintf(stderr,
+            cli::error(
                          "Presserator disconnected before GATT was ready. Check the device's "
-                         "Bluetooth pairing in your system settings.\n");
+                         "Bluetooth pairing in your system settings.");
             return false;
         }
         if (state.services_resolved) {
@@ -351,7 +354,7 @@ bool BleTransport::connect(const char* optional_address) {
     }
 
     if (impl_->characteristic_path.empty()) {
-        std::fprintf(stderr, "Presserator did not establish a ready GATT connection.\n");
+        cli::error("Presserator did not establish a ready GATT connection.");
         return false;
     }
 
@@ -361,13 +364,13 @@ bool BleTransport::connect(const char* optional_address) {
         g_clear_error(&error);
         impl_->discovery_started = false;
     }
-    std::fprintf(stderr, "Connected; sending text as keyboard input.\n");
+    cli::status(cli::Tone::Success, "Connected");
     return true;
 }
 
 bool BleTransport::send(const protocol::Packet& packet) {
     if (impl_->bus == nullptr || impl_->characteristic_path.empty()) {
-        std::fprintf(stderr, "Bluetooth transport is not connected.\n");
+        cli::error("Bluetooth transport is not connected.");
         return false;
     }
 
