@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <csignal>
 #include <string>
 #include <termios.h>
 #include <unistd.h>
@@ -20,6 +21,21 @@ constexpr uint8_t kLeftShift = 1u << 1;
 constexpr uint8_t kLeftControl = 1u;
 constexpr uint8_t kInteractiveQuit = 0x1C;
 
+termios g_original_terminal{};
+volatile sig_atomic_t g_terminal_active = 0;
+int g_terminal_output = -1;
+
+void quit_immediately(int signal) {
+    if (g_terminal_active) {
+        (void)::tcsetattr(STDIN_FILENO, TCSANOW, &g_original_terminal);
+        constexpr char reset[] = "\x1b]1337;SetUserVar=presserator=\x07\x1b[?2004l";
+        if (g_terminal_output >= 0) {
+            (void)::write(g_terminal_output, reset, sizeof(reset) - 1);
+        }
+    }
+    ::_exit(signal == SIGQUIT ? 0 : 130);
+}
+
 class TerminalInputMode {
 public:
     bool enable() {
@@ -32,7 +48,11 @@ public:
         }
 
         termios interactive = original_;
-        interactive.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO | ISIG | IEXTEN));
+        interactive.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO | IEXTEN));
+        interactive.c_lflag |= ISIG;
+        interactive.c_cc[VQUIT] = kInteractiveQuit;
+        interactive.c_cc[VINTR] = 0x03;
+        interactive.c_cc[VSUSP] = _POSIX_VDISABLE;
         interactive.c_iflag &= static_cast<tcflag_t>(~(IXON | ICRNL | INLCR | IGNCR));
         interactive.c_cc[VMIN] = 1;
         interactive.c_cc[VTIME] = 0;
@@ -48,6 +68,14 @@ public:
             std::fputs("\x1b[?2004h", terminal_output_);
             std::fflush(terminal_output_);
         }
+        g_original_terminal = original_;
+        g_terminal_output = terminal_output_ == nullptr ? -1 : ::fileno(terminal_output_);
+        g_terminal_active = 1;
+        struct sigaction action{};
+        action.sa_handler = quit_immediately;
+        ::sigemptyset(&action.sa_mask);
+        (void)::sigaction(SIGQUIT, &action, &old_quit_);
+        (void)::sigaction(SIGINT, &action, &old_interrupt_);
         return true;
     }
 
@@ -59,6 +87,9 @@ public:
                 std::fflush(terminal_output_);
             }
             (void)::tcsetattr(STDIN_FILENO, TCSANOW, &original_);
+            g_terminal_active = 0;
+            (void)::sigaction(SIGQUIT, &old_quit_, nullptr);
+            (void)::sigaction(SIGINT, &old_interrupt_, nullptr);
         }
     }
 
@@ -68,6 +99,8 @@ private:
     termios original_{};
     bool interactive_ = false;
     FILE* terminal_output_ = nullptr;
+    struct sigaction old_quit_{};
+    struct sigaction old_interrupt_{};
 };
 
 bool map_ascii(uint8_t character, KeyStroke* key) {
@@ -183,6 +216,11 @@ int main(int argc, char** argv) {
         }
     }
 
+    TerminalInputMode input_mode;
+    if (!input_mode.enable()) {
+        return 1;
+    }
+
     std::string clipboard_text;
     if (clipboard_mode) {
         if (!presserator::host::read_clipboard(&clipboard_text)) {
@@ -218,10 +256,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    TerminalInputMode input_mode;
-    if (!input_mode.enable()) {
-        return 1;
-    }
     if (input_mode.interactive()) {
         std::fprintf(stderr,
                      "Interactive mode: type or press Ctrl-Shift-V to send; Ctrl-Shift-C to quit.\n");

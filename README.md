@@ -45,14 +45,19 @@ To send text from a pipe or file instead:
 printf 'Hello, world!\n' | just run
 ```
 
-It reads ASCII text from the terminal or standard input, discovers and pairs
-with the Presserator over Bluetooth LE, then writes binary key-state protocol
+It reads ASCII text from the terminal or standard input, discovers and connects
+to the Presserator over Bluetooth LE, then writes binary key-state protocol
 packets to its GATT service. Each character becomes a HID key press followed by
 a release. For example:
 
 ```sh
 printf 'Hello, world!\n' | build/host/presserator-host
 ```
+
+Pair the device through your Bluetooth settings when needed. The utility reuses
+an existing connection and leaves it connected on exit; disconnect it through
+your Bluetooth settings whenever you choose. Ctrl-Shift-C quits immediately,
+including during connection setup or a paste.
 
 An optional Bluetooth address selects a particular device when more than one is
 advertising:

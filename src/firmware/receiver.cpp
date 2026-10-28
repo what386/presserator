@@ -17,7 +17,11 @@ esp_err_t protocol_receive(const uint8_t* packet, size_t size) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (g_have_sequence) {
+    bool session_start = frame.sequence == 0 && frame.state.modifiers == 0;
+    for (uint8_t key : frame.state.keys) {
+        session_start = session_start && key == 0;
+    }
+    if (g_have_sequence && !session_start) {
         const uint16_t advance = static_cast<uint16_t>(frame.sequence - g_last_sequence);
         if (advance == 0 || advance >= 0x8000) {
             return ESP_ERR_INVALID_STATE;

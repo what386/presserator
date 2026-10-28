@@ -114,7 +114,6 @@ std::string find_device(GVariant* objects, const char* requested_address) {
 }
 
 struct DeviceState {
-    bool paired = false;
     bool connected = false;
     bool services_resolved = false;
 };
@@ -133,13 +132,11 @@ DeviceState device_state(GVariant* objects, const std::string& device_path) {
         g_variant_unref(interfaces);
         DeviceState state;
         if (properties != nullptr) {
-            gboolean paired = false;
             gboolean connected = false;
             gboolean services_resolved = false;
-            g_variant_lookup(properties, "Paired", "b", &paired);
             g_variant_lookup(properties, "Connected", "b", &connected);
             g_variant_lookup(properties, "ServicesResolved", "b", &services_resolved);
-            state = {paired != 0, connected != 0, services_resolved != 0};
+            state = {connected != 0, services_resolved != 0};
             g_variant_unref(properties);
         }
         return state;
@@ -214,22 +211,6 @@ struct BleTransport::Impl {
     bool discovery_started = false;
 
     ~Impl() {
-        if (bus != nullptr && discovery_started && !adapter_path.empty()) {
-            GError* error = nullptr;
-            call_method(bus, adapter_path.c_str(), "org.bluez.Adapter1", "StopDiscovery",
-                        nullptr, &error);
-            if (error != nullptr) {
-                g_error_free(error);
-            }
-        }
-        if (bus != nullptr && !device_path.empty()) {
-            GError* error = nullptr;
-            call_method(bus, device_path.c_str(), "org.bluez.Device1", "Disconnect",
-                        nullptr, &error);
-            if (error != nullptr) {
-                g_error_free(error);
-            }
-        }
         if (bus != nullptr) {
             g_object_unref(bus);
         }
@@ -255,23 +236,26 @@ bool BleTransport::connect(const char* optional_address) {
         return false;
     }
     impl_->adapter_path = find_adapter(objects);
+    impl_->device_path = find_device(objects, optional_address);
     g_variant_unref(objects);
     if (impl_->adapter_path.empty()) {
         std::fprintf(stderr, "No BlueZ Bluetooth adapter was found.\n");
         return false;
     }
 
-    if (!call_method(impl_->bus, impl_->adapter_path.c_str(), "org.bluez.Adapter1",
-                     "StartDiscovery", nullptr, &error)) {
-        // BlueZ reports InProgress when another program is already scanning.
-        g_clear_error(&error);
-    } else {
-        impl_->discovery_started = true;
+    if (impl_->device_path.empty()) {
+        if (!call_method(impl_->bus, impl_->adapter_path.c_str(), "org.bluez.Adapter1",
+                         "StartDiscovery", nullptr, &error)) {
+            // BlueZ reports InProgress when another program is already scanning.
+            g_clear_error(&error);
+        } else {
+            impl_->discovery_started = true;
+        }
     }
 
     std::fprintf(stderr, "Searching for Presserator over Bluetooth LE...\n");
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (std::chrono::steady_clock::now() < deadline) {
+    while (impl_->device_path.empty() && std::chrono::steady_clock::now() < deadline) {
         objects = get_objects(impl_->bus, &error);
         if (objects == nullptr) {
             print_error("query BlueZ devices", error);
@@ -295,26 +279,16 @@ bool BleTransport::connect(const char* optional_address) {
 
     objects = get_objects(impl_->bus, &error);
     if (objects == nullptr) {
-        print_error("query BlueZ pairing state", error);
+        print_error("query BlueZ connection state", error);
         g_clear_error(&error);
         return false;
     }
-    const bool paired = device_state(objects, impl_->device_path).paired;
+    const bool already_connected = device_state(objects, impl_->device_path).connected;
     g_variant_unref(objects);
 
-    if (!paired) {
-        if (!call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
-                         "Pair", nullptr, &error, 60000)) {
-            print_error("pair with Presserator", error);
-            g_clear_error(&error);
-            return false;
-        }
-    }
-
-    // Pairing can briefly connect and then disconnect. BlueZ may also abort the
-    // first LE connection while that link is being torn down.
-    bool connected = false;
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    // Reuse an existing link; only establish one when disconnected.
+    bool connected = already_connected;
+    for (int attempt = 0; !connected && attempt < 3; ++attempt) {
         if (call_method(impl_->bus, impl_->device_path.c_str(), "org.bluez.Device1",
                         "Connect", nullptr, &error, 30000)) {
             connected = true;
